@@ -1,0 +1,228 @@
+import matplotlib.pyplot as plt
+import numpy as np
+
+PLOT_AMOUNT = 0
+
+class constrainedPoint:
+    '''
+    Makes it so time and point relations are kept at all times.
+
+    Will interpolate points if a requested time isn't present
+    '''
+    times = None
+    points = None
+
+    def raiseException(self, message):
+        raise Exception("Class contrainedPoint Exception: " + str(message))
+    
+    def __init__(self , timeList, pointList):
+        if len(timeList) != len(pointList):
+            self.raiseException("Supplied timeList and pointList do not have the same dimensions!")
+        self.times = timeList
+        self.points = pointList
+
+    def getTimeList(self):
+        return self.times
+
+    def getPointList(self):
+        return self.points
+
+    def getTimesPoints(self , newTimeList):
+        return [self.getPointAtTime(t) for t in newTimeList]
+
+    def getPointAtTime(self , time):
+        '''
+        Assumes that the time list doesn't jump around
+        '''
+        #perform binary search
+        timeIndex = self.binarySearchTime(0 , len(self.times) - 1 , time)
+        if timeIndex == None:
+            return None
+        if timeIndex == int(timeIndex):
+            return self.points[timeIndex]
+        #interpolate points
+        dp = self.points[int(timeIndex + 0.5)] - self.points[int(timeIndex - 0.5)]
+        dt = self.times[int(timeIndex + 0.5)] - self.times[int(timeIndex - 0.5)]
+        return ((dp/dt)* (timeIndex - self.times[int(timeIndex - 0.5)])) + self.points[int(timeIndex - 0.5)]
+
+    def binarySearchTime(self , lb , ub , t):
+        if t < self.times[lb] or t > self.times[ub]:
+            return None
+        if t == self.times[lb]:
+            return lb
+        if t == self.times[ub]:
+            return ub
+        if ub-lb == 1:
+            return ub-0.5
+        mb = int((ub - lb)/2) + lb
+        if self.times[mb] > t:
+            return self.binarySearchTime(lb , mb , t)
+        return self.binarySearchTime(mb , ub , t)
+    
+
+def readPointFile(fileName):
+    '''
+    In
+        fileName - Name of file to parse
+    Out
+        Dictionary, keys being column name and val being list of points
+
+    File Format - CSV style
+    First line is column headers
+    # denote lines that are comments
+    '''
+    fp = open(fileName , 'r')
+    out = {}
+    indexDict = {}
+    first = True
+    for line in fp:
+        line=line.strip()
+        splitline = line.split(",")
+        if line[0] == "#":
+            pass
+        elif first:
+            first = False
+            for i in range(len(splitline)):
+                indexDict[i] = splitline[i]
+                out[splitline[i]] = []
+        else:
+            for i in range(len(splitline)):
+                out[indexDict[i]].append(float(splitline[i]))
+    
+    fp.close()
+    return out
+
+def plotPoints(header , xAxis , yAxis , xAxisName = None , yAxisName = None):
+    '''
+    In
+        header - name of the graph
+        xAxis - A list of x axis points
+        yAxis - A dictionary of yAxis list points, where the key of the dict corresponds to the legend name
+        xAxisName - If given, it will label the xaxis with this str
+        yAxisName - If given, it will lavel the yaxis with this str
+    '''
+    global PLOT_AMOUNT
+    if PLOT_AMOUNT != 0:
+        plt.figure()
+    PLOT_AMOUNT += 1
+
+    plt.title(header)
+    if xAxisName:
+        plt.xlabel(xAxisName)
+    if yAxisName:
+        plt.ylabel(yAxisName)
+    for name in yAxis.keys():
+        if type(yAxis[name]) == list:
+            #If the yInput is a list
+            plt.plot(xAxis , yAxis[name] , label = name)
+        else:
+            #If constrained point
+            plt.plot(xAxis , yAxis[name].getTimesPoints(xAxis) , label = name)
+    plt.legend()
+
+def integrate(timeList, pointList, initialPoint):
+    out = []
+    integ = initialPoint
+    out.append(integ)
+    for i in range(len(timeList) - 1):
+        dt = timeList[i+1] - timeList[i]
+        p = pointList[i]
+        integ += dt * p
+        out.append(integ)
+    return out
+
+def findSlope(timeList , pointList , initialSlope):
+    '''
+    In
+        timeList  - list of time
+        pointList - list of points
+    Out
+       A Tuple of the list of time and a list of the slopes at each point  
+    '''
+    if len(timeList) != len(pointList):
+        raise("findSlope: timeList and pointList have different amounts of points")
+    out = []
+    #out.append(initialSlope)
+    #timeList.append(timeList[-1])
+    #pointList.append(pointList[-1])
+    for i in range(len(pointList)-1):
+        deltaT = timeList[i + 1] - timeList[i]
+        deltaP = pointList[i + 1] - pointList[i]
+        slope = deltaP/deltaT
+        out.append(slope)
+    return(out)
+
+def incrementListByAmount(inList , amount):
+    '''
+    Increment each value in list by amount
+    '''
+    return [x + amount for x in inList]
+
+def adjustPointsToLimits(tl , pl , bounds):
+    '''
+    In
+        timeList - list of time
+        pointList - list of points
+        bounds - tuple (high,low) that the derivPoint list must conform to
+    Out
+        (newTimeList , newPointList , newSlopeList) 
+    '''
+    timeList = tl.copy()
+    pointList = pl.copy()
+    newTime = [timeList.pop(0)]
+    newPoint = [pointList.pop(0)]
+    DT = 0.0
+    while len(pointList) > 0:
+        currTime = timeList.pop(0)
+        currPoint = pointList.pop(0)
+        if currPoint > bounds[0] or currPoint < bounds[1]:
+            #Bounds are being violated
+            #Figure out what to adjust
+            bound = bounds[0]
+            if currPoint < bounds[1]:
+                #Below low bound
+                bound = bounds[1]
+            #Figure out integration factor
+            dp = abs(bound - currPoint)
+            dt = 1 #TO FIX
+            if len(timeList) != 0:
+                dt = abs(timeList[0] - currTime)
+            integ = currPoint * dt
+            newdt = integ/bound
+            currPoint = bound
+            #Move the time list by dt
+            timeList = incrementListByAmount(timeList, newdt)
+            DT += dt
+        newTime.append(currTime)
+        newPoint.append(currPoint)
+    print(DT)
+    #Adjust the last two points to come to a not sudden stop 
+    #newSlope.append(0)
+    print(newTime)
+    return (newTime , newPoint)
+
+if __name__ == "__main__":
+    data = readPointFile("points.txt")
+    #plotPoints("Location" , data["X"] , {"Y":data["Y"]})
+    initialXSpeed = 0
+    initialYSpeed = 0
+    initialXAcc= 0
+    initialYAcc = 0
+    timeList = [i for i in range(len(data["X"]))]
+    yPos = constrainedPoint(timeList , data["Y"])
+    ySpeed = constrainedPoint(timeList[:-1] , findSlope(timeList , data["Y"] , initialYSpeed))
+    yPosFromSpeed = constrainedPoint(ySpeed.getTimeList() , integrate(ySpeed.getTimeList() , ySpeed.getPointList() , 0))
+    yAcc = constrainedPoint(ySpeed.getTimeList()[:-1] , findSlope(ySpeed.getTimeList() , ySpeed.getPointList() , initialYAcc))
+    ySpeedAdjustedVals = constrainedPoint(*adjustPointsToLimits(ySpeed.getTimeList() , ySpeed.getPointList() , (1,-1)))
+    yPosFromAdjSpeed = constrainedPoint(ySpeedAdjustedVals.getTimeList()  , integrate(ySpeedAdjustedVals.getTimeList() , ySpeedAdjustedVals.getPointList() , 0))
+    yAccAdjustedVals = constrainedPoint(*adjustPointsToLimits(yAcc.getTimeList() , yAcc.getPointList() , (1,-1)))
+    #plotPoints("X-Axis Over Time (Unadjusted)" , timeList , {"X":data["X"]})
+    plotPoints("Y Speed Over Time" , yAccAdjustedVals.getTimeList() , {"Unadjusted":ySpeed , "Speed Adjusted":ySpeedAdjustedVals , "Acc Adjusted":yAccAdjustedVals})
+    plotPoints("Y-Axis Over Time" , timeList , {"Y":yPos , "Y From Speed":yPosFromSpeed , "Y From Adj Speed":yPosFromAdjSpeed})
+    #plotPoints("Y-Axis Over Time" , yAccAdjustedVals[0] , {})
+    #plotPoints("Speeds" , timeList , {"X Speed":xSpeed , "Y Speed":ySpeed})
+    #plotPoints("Speeds Adjusted" , yAdjustedVals[0] , {"Y Speed":yAdjustedVals[2]})
+    #plotPoints("Acc" , timeList , {"X Acc":xAcc , "Y Acc":yAcc})
+    
+    if PLOT_AMOUNT != 0:
+        plt.show()
