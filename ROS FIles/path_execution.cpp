@@ -1,4 +1,12 @@
-
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/ioctl.h>
+#include <netinet/in.h>
+#include <net/if.h>
+#include <arpa/inet.h>
 #include <sstream>
 #include <math.h>  
 #include <iostream>
@@ -7,6 +15,7 @@
 #include <stdint.h>
 #include <ros/ros.h>
 #include <std_msgs/Empty.h>
+#include <std_msgs/String.h>
 #include <geometry_msgs/Twist.h>
 #include <nav_msgs/Odometry.h>
 #include <geometry_msgs/Pose.h>
@@ -16,6 +25,8 @@
 #include <kobuki_msgs/SensorState.h>
 #include <kobuki_msgs/MotorPower.h>
 #include <vector>
+
+#include "rapidjson/document.h"
 
 /*
 	WayPoint Class
@@ -61,18 +72,23 @@ class PathExecutor{
 		PathExecutor(ros::NodeHandle &n, std::vector<WayPoint> wps);
 		void updatePose(const nav_msgs::Odometry msg);
 		void updateBumper(const kobuki_msgs::BumperEventConstPtr msg);
+		void updatePath(const std_msgs::String::ConstPtr& msg);
 		void stateMachine();
+		void resetRobot();
+		void tester();
+		int getRobotIP();
 		bool isRunning();
 		WayPoint getLookAheadPoint(WayPoint currentLocation);
 	private:
 		ros::NodeHandle node;
-		ros::Subscriber pose_sub, bumper_sub;
+		ros::Subscriber pose_sub, bumper_sub , path_sub;
 		ros::Publisher drive_pub;
 		std::vector<WayPoint> pointVector;
 		geometry_msgs::Pose pose_message;
 		geometry_msgs::Twist velo_message;
 		WayPoint previousSetPoint;
 		WayPoint currentSetPoint;
+		std::string ipAddress;
 		int state;
 		double error;
 		double rawZ;
@@ -83,6 +99,7 @@ class PathExecutor{
 		double xPred;
 		double yPred;
 		bool done;
+		bool newDataRecieved;
 		double xStart;
 		double yStart;
 		bool justStarted;
@@ -99,24 +116,38 @@ class PathExecutor{
 
 PathExecutor::PathExecutor(ros::NodeHandle &n , std::vector<WayPoint> wps):pointVector(wps){
 	node = n;
-	done = false;
 	state = 0;
-	previousAngle = 0;
-	startAngle = 100;
-	xPred = 0;
-	yPred = 0;
-	justStarted = true;
-	currentSetPoint = WayPoint(0,0);
-	previousSetPoint = WayPoint(0,0);
+	resetRobot();
 	pose_sub = node.subscribe("odom", 10, &PathExecutor::updatePose, this);
 	bumper_sub = node.subscribe("mobile_base/events/bumper", 10, &PathExecutor::updateBumper, this);
+	path_sub = node.subscribe("robot_paths" , 10 , &PathExecutor::updatePath , this);
 	drive_pub = node.advertise<geometry_msgs::Twist>("mobile_base/commands/velocity", 1, true);
 	pathLog.open("pathLog.txt");
 	pathLog << "Robot X,Robot Y,Robot Angle,Close X,Close Y,Goal X,Goal Y\n";
 	ROS_INFO_STREAM("Init Path Executor\n");
 }
 
+void PathExecutor::resetRobot(){
+	pointVector.clear();
+	done = false;
+	previousAngle = 0;
+	startAngle = 100;
+	xPred = 0;
+	yPred = 0;
+	justStarted = true;
+	newDataRecieved = false;
+	currentSetPoint = WayPoint(0,0);
+	previousSetPoint = WayPoint(0,0);
+}
+
 void PathExecutor::stateMachine(){
+	/*
+		Case 0 - Reset
+		Case 1 - Wait for data then parse
+		Case 2 - Get new point
+		Case 3 - Execute
+		Case 4 - Finish
+	*/
 	double gamma;
 	double lookAheadDistance;
 	double lookAheadAngle;
@@ -133,18 +164,31 @@ void PathExecutor::stateMachine(){
 		case 0:
 			//Reset State
 			ROS_INFO_STREAM("State 0");
+			getRobotIP(); //Reset IP address
+			resetRobot();
 			state = 1;
 			break;
 		case 1:
+			//Wait for Data
+			if(newDataRecieved){
+				state = 2;
+			}
+			//ROS_INFO_STREAM("Waiting for data.");
+			//ROS_INFO_STREAM(ipAddress);
+			//tester();
+			//done = true;
+			break;
+		case 2:
+			newDataRecieved = false;
 			//Get new lookahead point
 			//ROS_INFO_STREAM("State 1");
 			current = WayPoint(xPred , yPred);
 			goalPoint = getLookAheadPoint(current);
 			goalPointRX = goalPoint.getX() - current.getX() ;//(goalPoint.getX() - current.getX())*std::cos(currentAngle) + (goalPoint.getY() - current.getY())*std::sin(currentAngle); //Relative to robot
 			goalPointRY = goalPoint.getY() - current.getY();//-(goalPoint.getX() - current.getX())*std::sin(currentAngle) + (goalPoint.getY() - current.getY())*std::cos(currentAngle); //Relative to robot
-			state = 2;
+			state = 3;
 			break;
-		case 2:
+		case 3:
 			//ROS_INFO_STREAM("State 2");
 			/*
 			gamma = -(2 * goalPointRX)/(std::pow(lookAhead , 2)); //-(2 * goalPointRX)/(std::pow(goalPointRY , 2)); 
@@ -178,13 +222,13 @@ void PathExecutor::stateMachine(){
 				}
 				
 			}
-			state = 1;
+			state = 2;
 			ROS_INFO_STREAM("CURRENT POINT(" << xPred << "," << yPred << ") GOAL POINT (" << goalPoint.getX() << "," << goalPoint.getY() << ") GAMMA " << gamma << " RADIUS " << radius);
 			velo_message.linear.x = speed;
 			velo_message.angular.z = gamma;
 			break;
-		case 3:
-			ROS_INFO_STREAM("State 3");
+		case 4:
+			ROS_INFO_STREAM("State 4");
 			//Move Forward State
 			break;
 	}
@@ -209,8 +253,9 @@ void PathExecutor::updatePose(const nav_msgs::Odometry msg){
 void PathExecutor::updateBumper(const kobuki_msgs::BumperEventConstPtr msg)
 {
 	//ROS_INFO_STREAM(msg->state);
-	//Quit Program
-	done = true;
+	//Reset Program
+	/////Quit Program
+	//done = true;
 	velo_message.linear.x = 0.0;
 	velo_message.linear.y = 0.0;
 	velo_message.linear.z = 0.0;
@@ -219,10 +264,66 @@ void PathExecutor::updateBumper(const kobuki_msgs::BumperEventConstPtr msg)
 	velo_message.angular.z = 0.0;
 	drive_pub.publish(velo_message);
 	pathLog.close();
+	state = 0;
+}
+
+void PathExecutor::updatePath(const std_msgs::String::ConstPtr& msg){
+	//Parse through message
+	const char* raw = msg->data.c_str();
+	ROS_INFO_STREAM(raw);
+	rapidjson::Document document;
+	document.Parse(raw);
+	assert(document.IsObject()); 
+	for (rapidjson::Value::ConstMemberIterator itr = document.MemberBegin(); itr != document.MemberEnd(); ++itr){
+		ROS_INFO_STREAM(ipAddress.compare(itr->name.GetString()));
+		if(ipAddress.compare(itr->name.GetString()) == 0){
+			//Data being recieved
+			rapidjson::Value& robotPath = document[itr->name.GetString()];	
+			for (rapidjson::SizeType i = 0; i < robotPath.Size(); i++){
+				rapidjson::Value& rPoint =  robotPath[i];
+				//ROS_INFO_STREAM(rPoint["X"].GetFloat());
+    			pointVector.push_back(WayPoint(rPoint["X"].GetFloat() , rPoint["Y"].GetFloat()));
+			}
+			//tester();
+			newDataRecieved = true;
+			break;
+		}
+	}
+	done = false;
 }
 
 bool PathExecutor::isRunning(){
 	return(!done);
+}
+
+int PathExecutor::getRobotIP(){
+	int currentSocket = socket(AF_INET , SOCK_DGRAM , 0);
+	struct ifreq ifr;
+
+	ifr.ifr_addr.sa_family = AF_INET;
+	strncpy(ifr.ifr_name , "wlan0" , IFNAMSIZ-1);
+
+	ioctl(currentSocket , SIOCGIFADDR , &ifr);
+
+	close(currentSocket);
+
+	ipAddress = inet_ntoa(((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr);
+	ROS_INFO_STREAM(ipAddress);
+	return 0;
+}
+
+void PathExecutor::tester(){
+	//Test JSON
+	const char* json = "{\"project\":\"rapidjson\",\"stars\":10}";
+    rapidjson::Document d;
+    d.Parse(json);
+    ROS_INFO_STREAM(d["project"].GetString());
+
+    //Print Points
+    for (std::vector<WayPoint>::const_iterator iterator = pointVector.begin(), end = pointVector.end(); iterator != end; ++iterator) {
+    	WayPoint point = *iterator;
+    	ROS_INFO_STREAM("X: " << point.getX() << " Y: " << point.getY());
+    }
 }
 
 WayPoint PathExecutor::getLookAheadPoint(WayPoint currPoint){
@@ -295,6 +396,7 @@ int main(int argc , char** argv)
 	ros::NodeHandle n;
 	
 	std::vector<WayPoint> points;
+	/*
 	points.push_back(WayPoint(0.0,0.0));
 	points.push_back(WayPoint(0.0,0.5));
 	points.push_back(WayPoint(0.0,1.0));
@@ -303,7 +405,7 @@ int main(int argc , char** argv)
 	points.push_back(WayPoint(1.0,0.5));
 	points.push_back(WayPoint(1.0,0.0));
 	points.push_back(WayPoint(0.5,0.0));
-
+	*/
 
 	PathExecutor executor(n , points);
 	 
