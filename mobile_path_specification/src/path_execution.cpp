@@ -26,7 +26,7 @@
 #include <kobuki_msgs/SensorState.h>
 #include <kobuki_msgs/MotorPower.h>
 #include <vector>
-
+#include <cstdlib>
 #include "rapidjson/document.h"
 
 
@@ -192,7 +192,7 @@ class PathExecutor{
 		double goalPointRY;
 		const double PI  = 3.141592653589793238463;
 		const double lookAhead = 0.03; //0.04;
-		const double lookAheadSquared = 0.0005;//0.0016;
+		const double lookAheadSquared = 0.003;//0.0016;
 		const double lookAheadSmallSquared = 0.0004;
 		const double lookAheadLargeSquared = 0.01;
 		const double width = 0.23;
@@ -217,7 +217,7 @@ PathExecutor::PathExecutor(std::string name, ros::NodeHandle &n , std::vector<Wa
 	bumper_sub = node.subscribe(robotName+"/mobile_base/events/bumper", 10, &PathExecutor::updateBumper, this);
 	path_sub = node.subscribe("robot_paths" , 10 , &PathExecutor::updatePath , this);
 	drive_pub = node.advertise<geometry_msgs::Twist>(robotName+"/mobile_base/commands/velocity", 1, true);
-	ROS_INFO_STREAM("Init Path Executor\n");
+	ROS_INFO_STREAM("Path Executor Starting For Robot " << name << "\n");
 }
 
 void PathExecutor::resetRobot(){
@@ -265,7 +265,7 @@ void PathExecutor::stateMachine(){
 	switch(state){
 		case 0:
 			//Reset State
-			ROS_INFO_STREAM("State 0");
+			//ROS_INFO_STREAM("State 0");
 			getRobotIP(); //Reset IP address
 			resetRobot();
 			velo_message.linear.x = 0;
@@ -313,7 +313,7 @@ void PathExecutor::stateMachine(){
 			mx = (crossProduct > 0 ? 1 : -1) * std::sin(currentAngle);
 			crossTerm = mx * dx + my * dy;
 			gamma = 0;
-			speed = 0.2;
+			speed = 0.15;
 			if(std::abs(crossProduct) > 1e-5 && std::abs(crossTerm) > 1e-5){
 				radius = 0.5 * std::abs(dx * dx + dy * dy)/crossTerm;
 
@@ -322,6 +322,10 @@ void PathExecutor::stateMachine(){
 					gamma = -gamma;
 				}
 				
+				if(std::abs(gamma) > gammaLimit){ //Limiting turn speed for consistency
+					gamma =  std::copysign(gammaLimit , gamma);
+					speed = std::copysign(gamma * radius , 1);
+				}
 				/*if(std::abs(accelExperiment) > maxAngularAccel){
 					gamma = previousGamma + std::copysign(maxAngularAccel * timeDelta.toSec() , gamma);
 					speed = gamma * radius;
@@ -337,30 +341,25 @@ void PathExecutor::stateMachine(){
 			
 			//test << "CURRENT POINT(" << xPred << "," << yPred << ") GOAL POINT (" << goalPoint.getX() << "," << goalPoint.getY() << ") GAMMA " << gamma << " RADIUS " << radius << "SEG LENGTH " << segmentVector.size();
 			
-			if(std::abs(gamma) > gammaLimit){ //Limiting turn speed for consistency
-				radius = 0.5 * std::abs(dx * dx + dy * dy)/crossTerm;
-				gamma =  std::copysign(gammaLimit , gamma);
-				speed = std::copysign(gamma * radius , 1);
-			}
+			
 				
 			accelExperiment = (gamma - previousGamma)/timeDelta.toSec();
-			test << "Computer Accel " << accelExperiment;
+
+			/*
+			test << "Computer Accel " << accelExperiment << "SEG LENGTH " << segmentVector.size();
 
 			t = test.str();
 			if(t != debugString){
 				debugString = t;
 				ROS_INFO_STREAM(t);
 			}
+			*/
 
 			velo_message.linear.x = speed;
 			velo_message.angular.z = gamma;
 
 			
 			speedLog << diff.toSec() << "," << speed << "," << gamma << "\n";
-			break;
-		case 4:
-			ROS_INFO_STREAM("State 4");
-			//Move Forward State
 			break;
 	}
 	drive_pub.publish(velo_message);
@@ -659,14 +658,17 @@ WayPoint PathExecutor::getLookAheadPoint(WayPoint currPoint){
 
 int main(int argc , char** argv)
 {
-	std::string RobotName;
-	ros::init(argc , argv , "line_following");
+	std::string rname;
+	//ros::param::param<std::string>("RobotName", rname, "noname");
+	rname = std::getenv("TURTLEBOT_NAME");
+	ros::init(argc , argv ,  rname+"_Path_Execution");
 	ros::NodeHandle n;
-	ros::param::param<std::string>("~RobotName", RobotName, "noname");
+	//n.getParam("RobotName" , rname);
+	
 	std::vector<WayPoint> points;
 
 	ros::Rate loop_rate(5);
-	PathExecutor executor(RobotName, n , points);
+	PathExecutor executor(rname, n , points);
 	 
 	while(ros::ok() && executor.isRunning()){
 		executor.stateMachine();

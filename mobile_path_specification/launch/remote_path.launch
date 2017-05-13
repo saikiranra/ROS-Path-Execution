@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<launch>
+	<arg name="name" default="$(env TURTLEBOT_NAME)" />
+	
+	<group ns="$(arg name)">
+    		<param name="tf_prefix" value="$(arg name)"/>
+
+
+
+		<!-- TurtleBot Driver: minimal_bringup-->
+		
+		<!--<include file="$(find turtlebot_bringup)/launch/$(arg name)_minimal.launch"/>-->
+		<include file="$(find turtlebot_bringup)/launch/$(arg name)_minimal.launch"/>
+
+		
+		
+	</group>
+
+	<node name="path_execution_$(env TURTLEBOT_NAME)" pkg="mobile_path_specification" output="screen" type="path_execution"> 
+			<param name="RobotName" type="string" value="$(env TURTLEBOT_NAME)" />
+		</node>
+</launch>
+
