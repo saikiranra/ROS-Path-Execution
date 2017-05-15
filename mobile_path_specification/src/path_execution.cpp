@@ -192,7 +192,7 @@ class PathExecutor{
 		double goalPointRY;
 		const double PI  = 3.141592653589793238463;
 		const double lookAhead = 0.03; //0.04;
-		const double lookAheadSquared = 0.003;//0.0016;
+		const double lookAheadSquared = 0.0016;//0.0016;
 		const double lookAheadSmallSquared = 0.0004;
 		const double lookAheadLargeSquared = 0.01;
 		const double width = 0.23;
@@ -260,6 +260,7 @@ void PathExecutor::stateMachine(){
 	ros::Duration timeDelta = currentTime - previousTime;
 	ros::Duration diff = currentTime - timePathStart;
 
+	PathSegment currentSegment;
 	std::ostringstream test;
 	std::string t;
 	switch(state){
@@ -314,8 +315,11 @@ void PathExecutor::stateMachine(){
 			crossTerm = mx * dx + my * dy;
 			gamma = 0;
 			speed = 0.15;
-			if(std::abs(crossProduct) > 1e-5 && std::abs(crossTerm) > 1e-5){
+
+			//currentSegment = PathSegment(current , goalPoint);
+			if(std::abs(crossProduct) > 0 && std::abs(crossTerm) > 0){
 				radius = 0.5 * std::abs(dx * dx + dy * dy)/crossTerm;
+				//radius = std::copysign(std::sqrt(currentSegment.getLengthSquared()) , crossTerm);
 
 				gamma = speed / radius;
 				if(crossProduct > 0){
